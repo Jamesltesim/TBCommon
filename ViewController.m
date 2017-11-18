@@ -1,85 +1,152 @@
 //
 //  ViewController.m
-//  TextVersion
+//  Test897
 //
-//  Created by toby on 04/09/2017.
-//  Copyright © 2017 kg.self.edu. All rights reserved.
+//  Created by Toby on 2017/11/18.
+//  Copyright © 2017年 Verge. All rights reserved.
 //
 
 #import "ViewController.h"
+#import "PayOrderTableViewCell.h"
+#import "PayOrderHeaderView.h"
 
-@interface ViewController ()
+@interface ViewController ()<UITableViewDelegate,UITableViewDataSource,PayOrderTableViewCellDelegate>
 
+@property (nonatomic,strong) UITableView *tabView;
+@property(nonatomic,strong) NSArray *payTypeArray;
+@property(nonatomic,strong) NSArray *payImageArray;
+@property (nonatomic,strong) UIButton *confirmButton;
+
+@property(nonatomic,strong) PayOrderTableViewCell *selectedCell;
 @end
 
 @implementation ViewController
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-
-    NSLog(@"com:%ld",[self compareVersion:@"1.1.0" to:@"2.0.9"]);
+    
+    self.payTypeArray = @[@[@"货到付款"],@[@"微信支付",@"支付宝支付"]];
+    self.payImageArray = @[@[[UIImage imageNamed:@"huodaofukuan"]],
+                           @[[UIImage imageNamed:@"wechatPay"],[UIImage imageNamed:@"aliPay"]]
+                           ];
+    
+    self.view.backgroundColor = [UIColor colorWithRed:239/255.0 green:239/255.0 blue:244/255.0 alpha:1];
+    
+    [self.view addSubview:self.tabView];
+    
+    [self.view addSubview:self.confirmButton];
+    
+    
+    NSString *price = @"22.7";
+    NSString *storeName = @"黄金翅吧";
+    NSString *number = @"28618300076016602";
+    UIImage *iconImg = [UIImage imageNamed:@""];
+    
+    PayOrderHeaderView *headerView = [[PayOrderHeaderView alloc] initWithFrame:CGRectMake(0, 0, self.tabView.frame.size.width, 80)];
+    headerView.priceLab.text = price;
+    headerView.storeNameAndNumberLab.text = [NSString stringWithFormat:@"%@ - %@",storeName,number];
+    headerView.imgView.image = iconImg;
+    
+    self.tabView.tableHeaderView = headerView;
+    
     
 }
 
+- (UIButton *)confirmButton{
+    if(!_confirmButton){
+        _confirmButton = [UIButton buttonWithType:UIButtonTypeCustom];
+        _confirmButton.frame = CGRectMake(10, self.tabView.frame.origin.y+self.tabView.frame.size.height+25, self.view.frame.size.width-20, 45);
+        _confirmButton.backgroundColor = [UIColor greenColor];
+        _confirmButton.layer.cornerRadius = 3;
+        [_confirmButton setTitle:[NSString stringWithFormat:@"货到付款 %@",@"22.7"] forState:UIControlStateNormal];
+        [_confirmButton setTitleColor:[UIColor colorWithRed:68/255.0 green:68/255.0 blue:68/255.0 alpha:1] forState:UIControlStateNormal];
+        _confirmButton.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+        [_confirmButton addTarget:self action:@selector(confirmPress:) forControlEvents:UIControlEventTouchUpInside];
+    }
+    return _confirmButton;
+    
+}
 
+- (void)confirmPress:(UIButton *)sender {
+    
+}
+
+- (UITableView *)tabView{
+    if(!_tabView){
+        _tabView = [[UITableView alloc]initWithFrame:CGRectMake(0, 0, self.view.frame.size.width, 280) style:UITableViewStyleGrouped];
+        _tabView.delegate = self;
+        _tabView.dataSource = self;
+        _tabView.scrollEnabled = YES;
+    }
+    return _tabView;
+}
+
+//section头部间距
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section
+{
+    
+    return 1;//section头部高度
+}
+//section头部视图
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section
+{
+    
+    UIView *view=[[UIView alloc] initWithFrame:CGRectMake(0, 0, 320, 1)];
+    view.backgroundColor = [UIColor clearColor];
+    return view ;
+    
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath{
+    return 50;
+}
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView{
+    return self.payTypeArray.count;
+}
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section{
+    NSArray *data = self.payTypeArray[section];
+    return data.count;
+}
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath{
+    PayOrderTableViewCell *cell = [[[NSBundle mainBundle]loadNibNamed:@"PayOrderTableViewCell" owner:nil options:nil] firstObject];
+    cell.delegate = self;
+    cell.indexPath = indexPath;
+    
+    NSArray *data = self.payTypeArray[indexPath.section];
+    NSArray *imgs = self.payImageArray[indexPath.section];
+    
+    cell.payTypeLab.text = data[indexPath.row];
+    cell.payImage.image = imgs[indexPath.row];
+    
+    if(self.selectedCell == nil){
+        self.selectedCell = cell;
+        self.selectedCell.sselectImage.image = [UIImage imageNamed:@"cross_selected"];
+    }
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath{
+    
+}
+
+- (void)payOrderCellAtIndex:(NSIndexPath *)indexpath{
+    self.selectedCell.sselectImage.image = [UIImage imageNamed:@"cross_normal"];
+    
+    PayOrderTableViewCell *cell = [self.tabView cellForRowAtIndexPath:indexpath];
+    self.selectedCell = cell;
+    self.selectedCell.sselectImage.image =[UIImage imageNamed:@"cross_selected"];
+    
+    if([indexpath isEqual:[NSIndexPath indexPathForRow:0 inSection:0]]){
+        [self.confirmButton setTitle:[NSString stringWithFormat:@"货到付款 %@",@"22.7"] forState:UIControlStateNormal];
+    }else{
+        [self.confirmButton setTitle:[NSString stringWithFormat:@"确认付款 %@ ",@"22.7"] forState:UIControlStateNormal];
+    }
+}
 - (void)didReceiveMemoryWarning {
     [super didReceiveMemoryWarning];
     // Dispose of any resources that can be recreated.
 }
 
-/**
- 比较两个版本号的大小
- 
- @param v1 第一个版本号
- @param v2 第二个版本号
- @return 版本号相等,返回0; v1小于v2,返回-1; 否则返回1.
- */
-- (NSInteger)compareVersion:(NSString *)v1 to:(NSString *)v2 {
-    // 都为空，相等，返回0
-    if (!v1 && !v2) {
-        return 0;
-    }
-    
-    // v1为空，v2不为空，返回-1
-    if (!v1 && v2) {
-        return -1;
-    }
-    
-    // v2为空，v1不为空，返回1
-    if (v1 && !v2) {
-        return 1;
-    }
-    
-    // 获取版本号字段
-    NSArray *v1Array = [v1 componentsSeparatedByString:@"."];
-    NSArray *v2Array = [v2 componentsSeparatedByString:@"."];
-    // 取字段最少的，进行循环比较
-    NSInteger smallCount = (v1Array.count > v2Array.count) ? v2Array.count : v1Array.count;
-    
-    for (int i = 0; i < smallCount; i++) {
-        NSInteger value1 = [[v1Array objectAtIndex:i] integerValue];
-        NSInteger value2 = [[v2Array objectAtIndex:i] integerValue];
-        if (value1 > value2) {
-            // v1版本字段大于v2版本字段，返回1
-            return 1;
-        } else if (value1 < value2) {
-            // v2版本字段大于v1版本字段，返回-1
-            return -1;
-        }
-        
-        // 版本相等，继续循环。
-    }
-    
-    // 版本可比较字段相等，则字段多的版本高于字段少的版本。
-    if (v1Array.count > v2Array.count) {
-        return 1;
-    } else if (v1Array.count < v2Array.count) {
-        return -1;
-    } else {
-        return 0;
-    }
-    
-    return 0;
-}
 
 @end
+
