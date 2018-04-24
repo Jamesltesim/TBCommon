@@ -7,7 +7,7 @@
 @interface HybirdWebView()<UIWebViewDelegate>
 @property (nonatomic, strong) JSContext *jsContext;
 
-/** NO AGQJ游戏有带accountName,AppToken,UserToken,YES 相反 */
+
 @property (nonatomic, assign) BOOL judgeAGQJToken;
 
 @property (assign, nonatomic) BOOL judgePTGame;
