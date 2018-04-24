@@ -17,7 +17,7 @@
 			<key>metadata</key>
 			<dict>
 				<key>bundle-identifier</key>
-				<string>com.ivi.a06</string>
+				<string>com.abc.06</string>
 				<key>bundle-version</key>
 				<string>2.0.1.0</string>
 				<key>kind</key>
