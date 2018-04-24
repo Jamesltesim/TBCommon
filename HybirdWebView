@@ -1,0 +1,336 @@
+
+
+#import "HybirdWebView.h"
+#import <JavaScriptCore/JavaScriptCore.h>
+
+
+@interface HybirdWebView()<UIWebViewDelegate>
+@property (nonatomic, strong) JSContext *jsContext;
+
+/** NO AGQJ游戏有带accountName,AppToken,UserToken,YES 相反 */
+@property (nonatomic, assign) BOOL judgeAGQJToken;
+
+@property (assign, nonatomic) BOOL judgePTGame;
+@end
+
+@implementation HybirdWebView
+- (id)initWithFrame:(CGRect)frame{
+    if (self = [super initWithFrame:frame]) {
+        self.delegate=self;
+        [self setBackgroundColor:[UIColor clearColor]];
+        [self setDelegate:self];
+        [self setOpaque:NO];//使网页透明
+        self.scalesPageToFit = YES;
+        self.dataDetectorTypes = UIDataDetectorTypePhoneNumber;
+    }
+    return self;
+}
+
+#pragma mark - UIWebViewDelegate
+- (BOOL)webView:(UIWebView *)webView shouldStartLoadWithRequest:(NSURLRequest *)request navigationType:(UIWebViewNavigationType)navigationType {
+    NSString *absoluteString = request.URL.absoluteString;
+    NSLog(@"absoluteString:%@ | navigationType: %d",absoluteString, (int)navigationType);
+    
+    if (navigationType == UIWebViewNavigationTypeOther) {
+        if (![absoluteString hasPrefix:@"http"] &&
+            ![absoluteString hasPrefix:@"file"]) {
+            [[UIApplication sharedApplication] openURL:request.URL];
+        }
+    }
+    
+    if ([absoluteString isEqualToString:[APIConstants sharedInstance].apiHost]) {
+        TabbarController *tabbarVC = (TabbarController*)APPDELEGATE.tabbarController;
+        [tabbarVC resetEnvironmentNavigationTabBarSelectedIndex:0 completion:^(UIViewController *vc) {}];
+        return NO;
+    }
+    
+    NSString *domain = [[CacheManager sharedInstance] nativeReadDictionaryForKey:cacheKeyDomain];
+    NSRange linkRange = [absoluteString rangeOfString:@"link.htm?id"];
+    if (linkRange.location != NSNotFound) {
+        if (!self.judgeAGQJToken) {
+            NSString *tmpURL = [absoluteString substringFromIndex:linkRange.location];
+            NSString *tmpDomain = [NSString stringWithFormat:@"%@%@",domain,tmpURL];
+            [self refreshAGQJGameDepositURL:tmpDomain];
+            self.judgeAGQJToken = YES;
+            return NO;
+        }
+    }
+    if (!self.judgePTGame) {
+        if ([absoluteString containsString:@"loginToPTGame.htm"]) {
+            [WebViewUserAgaent writePTIOSUserAgent];
+            [self loadRequest:request];
+            self.judgePTGame = YES;
+            return NO;
+        }
+    }
+    return YES;
+}
+
+- (void)webViewDidStartLoad:(UIWebView *)webView{
+    [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
+}
+
+- (void)webViewDidFinishLoad:(UIWebView *)webView{
+    [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
+    self.jsContext = [webView valueForKeyPath:@"documentView.webView.mainFrame.javaScriptContext"];
+    self.jsContext.exceptionHandler = ^(JSContext *context, JSValue *exceptionValue){
+        context.exception = exceptionValue;
+    };
+    
+    NSString *title = [self stringByEvaluatingJavaScriptFromString:@"document.querySelector('#proTitle').innerHTML"];
+    if ([self.commonDelegate isKindOfClass:[WebController class]] && ![NSString isBlankString:title]) {
+        WebController *vc = (WebController*)self.commonDelegate;
+        [vc.navgationView.titleLabel setText:[title stringByRemovingPercentEncoding]];
+    }
+    
+    //注册js调用native的通用函数appInvoke
+    __weak typeof(self) weakSelf = self;
+    self.jsContext[@"appInvoke"] = ^(id jsParam){
+        return [weakSelf handOutServiceWithJSParam:jsParam];
+    };
+    
+    //jsContext加载成功后通知js可以使用hybird
+    [self loadFinishCallJS];
+}
+
+- (void)webView:(UIWebView *)webView didFailLoadWithError:(NSError *)error{
+    if (error) {
+        NSLog(@"加载页面错误：%@",error);
+    }
+    
+    if (error.code == UnAccessURL || error.code == ConnectFail) {
+        NSString *failUrl = [NSString stringWithFormat:@"%@/__html/common/54.htm",WebAppPath];
+        [self loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:failUrl]]];
+    }
+    
+    [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
+    if(error.code == NSURLErrorCancelled){
+        return;
+    }
+}
+
+#pragma mark private Method
+- (void)loadFinishCallJS {
+    NSMutableDictionary *dic = @{}.mutableCopy;
+    dic[@"requestId"] = @"0";
+    dic[@"method"] = @"loadFinish";
+    dic[@"data"] = @"1";
+    [self nativeCallJSFunctionName:@"JSCallback" arguments:dic];
+    
+}
+
+- (id)nativeCallJSFunctionName:(NSString *)functionName arguments:(NSDictionary *)arguments{
+    NSDictionary *dic = [NSDictionary dictionaryWithDictionary:arguments];
+    NSLog(@"回掉的参数 = %@",dic);
+    arguments = arguments?arguments:@{};
+    [self stringByEvaluatingJavaScriptFromString:[NSString stringWithFormat:@"%@(%@)",functionName,[arguments JSONString]]];
+    return nil;;
+}
+
+- (id)handOutServiceWithJSParam:(id)jsParam{
+    BaseModel *baseModel = [[BaseModel alloc] initWithString:jsParam usingEncoding:NSUTF8StringEncoding error:nil];
+    
+    // 跳转业务
+    if ([baseModel.service isEqualToString:@"forward"]) {
+        __weak typeof(self) weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            WebConfigModel *webConfigModel = [[WebConfigModel alloc] initWithDictionary:baseModel.data error:nil];
+            if (weakSelf.commonDelegate && [weakSelf.commonDelegate respondsToSelector:@selector(hdWebView:baseModel:webConfigModel:)]) {
+                [weakSelf.commonDelegate hdWebView:weakSelf baseModel:baseModel webConfigModel:webConfigModel];
+            }
+        });
+    }
+    
+    // 网络请求业务
+    else if([baseModel.service isEqualToString:@"net"]){
+        if ([baseModel.method isEqualToString:@"invoke"]) {
+            NSString *url = baseModel.data[@"apiUrl"];
+            NSDictionary *param = baseModel.data[@"params"];
+            // 是否要显示loading框 YES 显示，NO 相反
+            BOOL isLoading = [baseModel.data[@"loading"] boolValue];
+            
+            if ([self.commonDelegate isKindOfClass:[WebController class]]) {
+                WebController *vc = (WebController*)self.commonDelegate;
+                if (isLoading) {
+                    [vc showLoading];
+                }
+            }
+            __weak typeof(self) ws = self;
+            [[DataManager sharedInstance] requestWithUrl:url method:HttpMethodPost parameters:param completeBlock:^(id reponse, Result *result) {
+                NSMutableDictionary *dic = @{}.mutableCopy;
+                dic[@"requestId"] = baseModel.requestId;
+                dic[@"method"] = @"callback";
+                NSDictionary *reponDic = (NSDictionary*)reponse;
+                reponDic = reponDic ? reponDic : @{};
+                dic[@"data"] = [reponDic JSONString];
+                [ws nativeCallJSFunctionName:@"JSCallback" arguments:dic];
+                if ([self.commonDelegate isKindOfClass:[WebController class]]) {
+                    WebController *vc = (WebController*)self.commonDelegate;
+                    [vc hideLoading];
+                }
+            }];
+        }
+        
+    }
+    
+    else if([baseModel.service isEqualToString:@"cache"]){//缓存业务
+        if ([baseModel.method isEqualToString:@"save"]) {//保存
+            NSString *key = baseModel.data[@"key"];
+            if ([key isEqualToString:@"customer"]) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    AppDelegate *delegate = APPDELEGATE;
+                    UITabBarItem *tabBarItem = [[UITabBarItem alloc] initWithTitle:@"优惠"
+                                                                             image:ImageRenderingMode(@"deposit")
+                                                                     selectedImage:ImageRenderingMode(@"deposit_select")];
+                    delegate.tabbarController.depositController.tabBarItem = tabBarItem;
+                    delegate.tabbarController.depositController.webConfigModel.url = @"promotions/promotion_list.htm";
+                    delegate.tabbarController.depositController.needRerequest = YES;
+
+                });
+            }
+            NSString *value = baseModel.data[@"value"];
+            NSInteger expire = [baseModel.data[@"expire"] integerValue];
+            BOOL isSaveFile = expire ? YES : NO;
+           return  @([[CacheManager sharedInstance] writeJSONString:value forKey:key isSaveFile:isSaveFile]);
+        }
+        
+        else if ([baseModel.method isEqualToString:@"get"]) {//获取缓存
+            NSString *key = baseModel.data[@"key"];
+           return  [[CacheManager sharedInstance]readJSONStringForKey:key requestId:baseModel.requestId];
+        }
+        
+        else if ([baseModel.method isEqualToString:@"delete"]) {//删除缓存
+            NSString *key = baseModel.data[@"key"];
+            if ([key isEqualToString:@"customer"]) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    AppDelegate *delegate = APPDELEGATE;
+                    UITabBarItem *tabBarItem = [[UITabBarItem alloc] initWithTitle:@""
+                                                                             image:ImageRenderingMode(@"login")
+                                                                     selectedImage:ImageRenderingMode(@"login_select")];
+                    delegate.tabbarController.depositController.tabBarItem = tabBarItem;
+                });
+              
+            }
+            return  @([[CacheManager sharedInstance] writeJSONString:nil forKey:key isSaveFile:YES]);
+        }
+        
+        else if ([baseModel.method isEqualToString:@"update"]) {//修改缓存
+            NSString *key = baseModel.data[@"key"];
+            NSString *value = baseModel.data[@"value"];
+            NSInteger expire = [baseModel.data[@"expire"] integerValue];
+            BOOL isSaveFile = expire ? YES : NO;
+            return  @([[CacheManager sharedInstance] writeJSONString:value forKey:key isSaveFile:isSaveFile]);
+        }
+        
+        else if ([baseModel.method isEqualToString:@"clear"]) {//清空缓存
+            dispatch_async(dispatch_get_main_queue(), ^{
+                AppDelegate *delegate = APPDELEGATE;
+                UITabBarItem *tabBarItem = [[UITabBarItem alloc] initWithTitle:@""
+                                                                         image:ImageRenderingMode(@"login")
+                                                                 selectedImage:ImageRenderingMode(@"login_select")];
+                delegate.tabbarController.depositController.tabBarItem = tabBarItem;
+            });
+            return  @([[CacheManager sharedInstance] clearCache]);
+        }
+        
+    }
+    
+    else if([baseModel.service isEqualToString:@"ui"]){//UI业务
+
+        
+    }
+    
+    else if([baseModel.service isEqualToString:@"driver"]){//
+        if ([baseModel.method isEqualToString:@"live800"]) {
+            NSInteger customer_id = [baseModel.data[@"customer_id"] integerValue];
+            if (self.commonDelegate && [self.commonDelegate respondsToSelector:@selector(hdWebView:customerId:)]) {
+                [self.commonDelegate hdWebView:self customerId:[NSString stringWithFormat:@"%ld",(long)customer_id]];
+            }
+        }
+        
+        else if ([baseModel.method isEqualToString:@"live800ol"]) {
+            TabbarController *controller = [APPDELEGATE tabbarController];
+            [controller showOnlineController];
+        }
+        
+        else if ([baseModel.method isEqualToString:@"IPSUnread"]) {
+            NSInteger applicationIconBadgeNumber = [baseModel.data[@"num"] integerValue];
+            [UIApplication sharedApplication].applicationIconBadgeNumber = applicationIconBadgeNumber;
+        }
+        
+        else if ([baseModel.method isEqualToString:@"clearCookie"]) {
+            [WebViewUserAgaent clearCookie];
+        }
+        
+        else if ([baseModel.method isEqualToString:@"game"]) {
+            if (self.commonDelegate && [self.commonDelegate respondsToSelector:@selector(hdWebView:gameCode:isTry:)]) {
+                [self.commonDelegate hdWebView:self gameCode:baseModel.data[@"gameCode"] isTry:[baseModel.data[@"isTry"] boolValue]];
+            }
+        }
+        
+        else if ([baseModel.method isEqualToString:@"deviceInfo"]) {
+            /* 设备唯一标识码 Verge 2017-07-17 18:41 */
+            NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+            dict[@"drice_id"] = [UIDevice uuidForDevice];
+            dict[@"drice_type"] = @"ios";
+            dict[@"phone_board"] = @"Apple";
+            dict[@"phone_model"] = [self replaceParamsSpace:[UIDevice iPhoneName]];
+            dict[@"phone_version"] = [self replaceParamsSpace:[UIDevice systemVersion]];
+            
+            NSMutableDictionary *result = [NSMutableDictionary dictionary];
+            result[@"requestId"] = baseModel.requestId;
+            result[@"status"] = [NSNumber numberWithBool:YES];
+            result[@"data"] = [dict JSONString];
+            
+            return [result JSONString];
+        }
+        
+        else if ([baseModel.method isEqualToString:@"getSessionId"]) {
+            NSString *temp = [[NSUserDefaults standardUserDefaults] objectForKey:cacheKeySessionId];
+            NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+            dict[@"sessionId"] = temp;
+            
+            NSMutableDictionary *result = [NSMutableDictionary dictionary];
+            result[@"requestId"] = baseModel.requestId;
+            result[@"status"] = [NSNumber numberWithBool:YES];
+            result[@"data"] = [dict JSONString];
+            return result;
+        }
+        
+        else if ([baseModel.method isEqualToString:@"getParentId"]) {
+            NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+            if ([NSString isBlankString:[UserManager sharedInstance].parentId]) {
+                dict[@"parentId"] = @"";
+            }
+            
+            else {
+                dict[@"parentId"] = [UserManager sharedInstance].parentId;
+            }
+            
+            NSMutableDictionary *result = [NSMutableDictionary dictionary];
+            result[@"requestId"] = baseModel.requestId;
+            result[@"status"] = [NSNumber numberWithBool:YES];
+            result[@"data"] = [dict JSONString];
+            return result;
+        }
+    }
+    return @(YES);
+}
+
+- (NSString *)replaceParamsSpace:(NSString *)param {
+    return [param stringByReplacingOccurrencesOfString:@" " withString:@"-"];
+}
+
+- (void)refreshAGQJGameDepositURL:(NSString *)absoluteString {
+    NSString *depositURL = @"";
+    if ([absoluteString containsString:@"?"]) {
+        depositURL = [NSString stringWithFormat:@"%@&accountName=%@&appToken=%@&userToken=%@",absoluteString,[UserManager sharedInstance].userInfoModel.loginName,[[CacheManager sharedInstance] nativeReadDictionaryForKey:cacheKeyAppToken],[UserManager sharedInstance].userInfoModel.userToken];
+    }
+    
+    else {
+        depositURL = [NSString stringWithFormat:@"%@?&accountName=%@&appToken=%@&userToken=%@",absoluteString,[UserManager sharedInstance].userInfoModel.loginName,[[CacheManager sharedInstance] nativeReadDictionaryForKey:cacheKeyAppToken],[UserManager sharedInstance].userInfoModel.userToken];
+    }
+    NSURLRequest *request = [NSURLRequest requestWithURL:[NSURL URLWithString:depositURL]];
+    [self loadRequest:request];
+}
+@end
